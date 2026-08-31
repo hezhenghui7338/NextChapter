@@ -4,4 +4,4 @@
 通过本地 HTTP 服务暴露给 Swift macOS app。
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"

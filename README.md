@@ -1,132 +1,254 @@
-<p align="center">
-  <img src="docs/assets/logo.png" alt="NextChapter — 续章" width="640">
-</p>
+![NextChapter — 续章](docs/assets/logo.png)
 
-<p align="center">
-  <strong>中文网文 AI 续写助手</strong><br>
-  导入你的网文 → 自动分析 → 选 A/B/C 续写动线 → 出章
-</p>
+**中文网文 AI 续写助手**  
+导入你的网文 → 让 AI 吃透前文 → 三选一动线出下一章
 
-> 架构沿用 [Lumina](https://github.com/hezhenghui7338/Lumina)（Swift macOS app + Python sidecar），但完全重写网文特化逻辑。
+macOS 14+ · [Latest Release](https://github.com/hezhenghui7338/NextChapter/releases/latest)
 
-## 特性（目标）
+[产品体验](#产品体验) · [续写动线](#三种续写动线) · [下载安装](#下载安装) · [开发者](#开发者)
 
-- **TXT / 粘贴导入**：支持中文章节切分（`第X章` / `卷X` / `序` / `楔子` / `番外`）
-- **滚动摘要**：每章细摘要 → 中期粗摘要 → 远端一句话压缩（25 章窗口滑动）
-- **风格向量**：从作者前 N 章抽取 few-shot + LLM 抽风格描述 + 反 AI 味提示词
-- **三选一动线**：A 一键续写（不规划，点一下出章）/ B 用户规划续写（自己写纲要，AI 照写）/ C AI 规划续写（AI 先出规划，多轮讨论后锁定再写）—— 续写主视图把三条动线做成互斥 radio，按需选
-- **规划讨论（C 动线）**：点「让 AI 出一份规划初稿」一键触发，AI 出 5 维初稿后可编辑、可展开讨论面板多轮改写，满意后「锁定规划」再生成正文
-- **轻量一致性检查**：续写后用 LLM 扫描与前文的冲突（人物/世界/剧情）
-- **增量导入**：用户续写了几章后再次导入，自动增量分析
+---
 
-## 项目结构
+## 这是什么
+
+**NextChapter** 是中文网文作者专用的「下一章」协作工作台——不是通用对话式写作工具，而是围绕网文连载习惯设计：
+
+- 你已有成稿（几十章到上千章），需要 AI **接续你的文风与剧情**，而不是从零胡写
+- 日常更新要快（A 动线一键出章），卡文时要能碰撞思路（C 动线 AI 规划），有腹稿时要能控剧情（B 动线按规划写）
+- 续写后需要扫一遍**人物 / 设定 / 伏笔**是否与前文冲突
+
+---
+
+## 产品体验
+
+App 分为三个 Tab：**书库** · **续章** · **设置**。典型使用路径如下。
+
+### 1. 首次打开：配置 LLM
+
+进入 **设置**，填写云端 LLM 凭证（推荐 DeepSeek，性价比最高）：
+
+
+| 项        | 说明                               |
+| -------- | -------------------------------- |
+| Provider | DeepSeek / OpenAI 兼容 / Anthropic |
+| API Key  | 仅存本机 UserDefaults，不上传            |
+| Model    | 如 `deepseek-chat`                |
+| 反 AI 味   | 三档强度，续写时注入「去 AI 味」约束             |
+| 上下文窗口    | 默认 25 章分级（5 细 + 10 粗 + 10 极简）    |
+
+
+App 启动时会自动拉起内嵌 Python sidecar，无需手动装 Python。
+
+### 2. 导入作品：把整本书喂给系统
+
+在 **书库** 工具栏：
+
+- **文档导入** — 选 `.txt` 文件
+- **粘贴导入** — 直接粘贴正文
+
+系统自动识别《书名》/ 作者行，并按中文网文章节标题切分（`第X章` / `卷X` / `序` / `楔子` / `番外` 等）。左侧出现书架条目，点进详情可浏览章节列表，切换「摘要 / 原文」视图。
+
+### 3. 开始分析：让 AI 吃透你的书
+
+选中作品，点 **「开始分析」**。这会调用云端 LLM，依次完成：
+
+1. **风格抽取** — 从前几章取 few-shot 样本 + 生成风格描述 + 反 AI 味提示词
+2. **逐章细摘要** — 每章约 400 字，覆盖事件、人物、悬念
+3. **滑动窗口压缩** — 长书按近→远分为细 / 粗 / 极简三档，塞进 25 章上下文窗口
+
+分析完成后，章节列表显示摘要；续章 Tab 才能使用。
+
+> **增量场景**：你自己续写了几章、或再次导入新章节后，点 **「继续摘要（N 章）」** 只补新章，不必全量重跑。续章页若检测到有未摘要章节，会提示你回书库补摘要。
+
+### 4. 续章：选动线，出下一章
+
+切到 **续章** Tab，左侧选书，右侧是续写工作台：
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  第 X 章          目标 2000 字                           │
+├─────────────────────────────────────────────────────────┤
+│  [ 一键续写 ]  [ 按我的规划续写 ]  [ AI 规划续写 ]  ← 三选一 │
+├─────────────────────────────────────────────────────────┤
+│  风格描述 · 反 AI 强度 · 上下文窗口统计                    │
+├─────────────────────────────────────────────────────────┤
+│  （动线专属输入区：规划框 / AI 讨论面板 / 一键按钮）        │
+├─────────────────────────────────────────────────────────┤
+│  生成结果：标题 + 正文（可编辑 / 预览）                    │
+│  [ 复制 ] [ 采纳加入原文 ] [ AI 重写 ] [ 一致性检查 ]      │
+└─────────────────────────────────────────────────────────┘
+```
+
+填写 **下一章标题**（如「第 388 章」）和 **目标字数**（500–5000，步进 500），然后选一条动线（详见下节）。
+
+### 5. 审阅结果：改、查、收
+
+生成后你可以：
+
+
+| 动作          | 体验                          |
+| ----------- | --------------------------- |
+| **编辑**      | 直接改正文和标题；支持编辑 / 预览切换        |
+| **复制**      | 整章（标题 + 正文）到剪贴板             |
+| **采纳，加入原文** | 追加到本书末尾，相当于「增量导入」的一章        |
+| **AI 重写**   | AI 审稿，列出问题并给出建议重写版，可一键替换    |
+| **一致性检查**   | LLM 扫描与前文的冲突：人物状态、世界规则、剧情伏笔 |
+
+
+满意后 **采纳** 或 **导出 TXT**（书库详情 / 右键菜单），继续下一章。
+
+### 6. 日常更新 vs 卡文：怎么选动线
+
+
+| 你的状态         | 推荐动线            | 操作                                    |
+| ------------ | --------------- | ------------------------------------- |
+| 剧情顺畅，今天要更一章  | **A · 一键续写**    | 点一下，AI 基于上下文即兴发挥                      |
+| 已有明确纲要，要严格控制 | **B · 按我的规划续写** | 填 5 维规划（剧情 / 场景 / 爽点 / 节奏 / 坑点），AI 照写 |
+| 卡文，想多碰撞几条思路  | **C · AI 规划续写** | AI 出规划初稿 → 编辑或讨论 → 锁定 → 按规划写          |
+
+
+三条动线 **互斥**：切换时会清空当前动线的中间态（未锁定规划、讨论历史等），避免 A/B/C 串台。
+
+---
+
+## 三种续写动线
+
+### A · 一键续写
+
+**不规划，点一下出章。**
+
+AI 读取 25 章滑动窗口 + 风格向量 + 反 AI 味约束，直接生成下一章正文。适合日常更新、剧情不卡、信任 AI 即兴发挥的场景。
+
+### B · 按我的规划续写
+
+**你先写纲要，AI 严格照写。**
+
+在结构化输入框写下下一章规划（剧情走向、关键场景、爽点、节奏、坑点），点 **「按我的规划续写」**。AI 不会擅自发散——适合已有腹稿、要把控剧情走向的场景。
+
+### C · AI 规划续写
+
+**AI 先出规划，讨论满意后再写。**
+
+分三步：
+
+1. **出初稿** — 点「AI 一键生成规划」，AI 给出 5 维规划初稿
+2. **编辑 / 讨论** — 可直接改初稿，或展开讨论面板多轮对话（AI 给建议，你手动合并，不会误覆盖）
+3. **锁定 → 续写** — 满意后点「锁定规划」，再点「按规划续写」生成正文
+
+适合卡文、想先碰撞思路再落笔的场景。
+
+---
+
+## 幕后：AI 怎么「吃透」你的书
+
+续写质量不只看 prompt，还依赖导入后的分析管线：
+
+
+| 能力           | 作用                                               |
+| ------------ | ------------------------------------------------ |
+| **中文章节切分**   | 识别网文常见章名格式，空章 / 短章合并                             |
+| **三档滚动摘要**   | 细（~400 字）→ 粗（~150 字）→ 极简（~60 字），远章压缩、近章保留细节      |
+| **25 章滑动窗口** | 短书（≤25 章）全部细摘要；长书 5+10+10 分级，控制 token 又保留近章精度    |
+| **风格向量**     | 从前 N 章抽 few-shot + LLM 描述句长、叙事习惯、对话风格            |
+| **反 AI 味**   | 三档强度注入续写 prompt，减少排比堆砌、空洞抒情等「AI 味」               |
+| **轻量一致性检查**  | 续写后单次 LLM 扫描人物 / 世界 / 剧情冲突（完整 fact-bank 在路线图 P1） |
+
+
+文本与书架数据存本机（`~/Library/Application Support/NextChapter/`）；调用 LLM 时只传必要的摘要、上下文与请求正文。
+
+---
+
+## 下载安装
+
+**系统要求：** macOS 14.0+（Apple Silicon / Intel），需联网（云端 LLM）。
+
+
+| 格式                                                                   | 说明                                      |
+| -------------------------------------------------------------------- | --------------------------------------- |
+| [DMG](https://github.com/hezhenghui7338/NextChapter/releases/latest) | 推荐：打开后将 NextChapter.app 拖入 Applications |
+| ZIP                                                                  | 解压后直接运行 NextChapter.app                 |
+
+
+安装后：
+
+1. 打开 App → **设置** → 填写 API Key
+2. **书库** → 导入 TXT 或粘贴正文
+3. **开始分析** → 切 **续章** → 选动线出章
+
+无需单独安装 Python 或 Xcode。安装包约 43 MB。
+
+---
+
+## 开发者
+
+### 项目结构
 
 ```
 NextChapter/
 ├── apps/macos/                # Swift macOS app（SwiftUI）
-│   ├── Package.swift
 │   └── NextChapter/
-│       ├── NextChapterApp.swift
-│       ├── ContentView.swift
-│       ├── Services/          # SidecarManager / CoreClient / AppSettings
-│       ├── Models/            # Book / BookStore
-│       └── Features/          # Library / Continue / Settings
-└── packages/nextchapter-core/ # Python sidecar（FastAPI）
-    ├── nextchapter_core/
-    │   ├── chunker/           # 中文章节切分
-    │   ├── summarize/         # 三档摘要
-    │   ├── context/           # 25 章滑动窗口
-    │   ├── style/             # 风格向量 + 反 AI 味
-    │   ├── writing/           # 续写引擎（避免与 Python 关键字冲突）
-    │   ├── consistency/       # 轻量一致性检查
-    │   ├── llm/               # LLM 客户端（DeepSeek/OpenAI/Anthropic）
-    │   └── api/               # FastAPI HTTP 服务
-    ├── scripts/run_dev.sh
-    └── tests/
+│       ├── Features/          # Library / Continue / Settings
+│       └── Services/          # SidecarManager / CoreClient / AppSettings
+├── packages/nextchapter-core/ # Python sidecar（FastAPI）
+│   └── nextchapter_core/
+│       ├── chunker/ summarize/ context/ style/
+│       ├── writing/ consistency/ llm/ api/
+│       └── tests/
+├── scripts/                   # build-release.sh / smoke.sh …
+└── docs/PRD.md                # 产品设计文档
 ```
 
-## 开发
+### 本地开发
 
-### 1) 准备 Python 侧
+```bash
+# 安装 just: brew install just
+
+just install          # Python venv + 依赖
+export NC_LLM_API_KEY=sk-xxx
+just dev              # 后台 sidecar + 前台 app
+
+just test             # 单元 + E2E（mock LLM，93 项）
+just release          # 测试 → PyInstaller → Swift release → .app
+```
+
+或手动：
 
 ```bash
 cd packages/nextchapter-core
-python3 -m venv .venv
-source .venv/bin/activate
+python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-
-# 设置 LLM key
 export NC_LLM_API_KEY=sk-xxx
-export NC_LLM_PROVIDER=deepseek
-export NC_LLM_BASE_URL=https://api.deepseek.com/v1
-export NC_LLM_MODEL=deepseek-chat
+python -m nextchapter_core.api.server   # → http://127.0.0.1:18432
 
-# 跑测试
-pytest
-
-# 启动 sidecar
-python -m nextchapter_core.api.server
-# → http://127.0.0.1:18432
+cd apps/macos && swift run              # 另一个终端
 ```
 
-### 2) 启动 macOS app
+### Sidecar API
 
-```bash
-cd apps/macos
-swift run
-```
 
-Swift app 会自动检测 sidecar 是否在 18432 端口运行，没有就启动。
+| 端点                                    | 说明                                          |
+| ------------------------------------- | ------------------------------------------- |
+| `GET /health`                         | 健康检查                                        |
+| `POST /ingest/path` · `/ingest/paste` | 文件 / 粘贴导入                                   |
+| `POST /summarize`                     | 三档摘要（fine / coarse / ultra）                 |
+| `POST /style`                         | 风格向量 + 反 AI 味                               |
+| `POST /context/build`                 | 25 章滑动窗口拼装                                  |
+| `POST /continue/plan_turn`            | 规划讨论（C 动线）                                  |
+| `POST /continue/generate`             | 续写；`mode`: `auto` / `user_plan` / `ai_plan` |
+| `POST /consistency/check`             | 一致性扫描                                       |
 
-### 3) 端到端联通验证
 
-```bash
-# 终端 1
-cd packages/nextchapter-core && source .venv/bin/activate
-python -m nextchapter_core.api.server
+完整契约见 [docs/PRD.md](docs/PRD.md) 第 6 节。
 
-# 终端 2
-curl http://127.0.0.1:18432/health
-# → {"status":"ok",...}
-
-curl -X POST http://127.0.0.1:18432/ingest/paste \
-  -H "Content-Type: application/json" \
-  -d '{"text":"《测试》\n作者：X\n\n第一章 ...\n\n第二章 ...","title":"","author":""}'
-```
-
-## API 端点（sidecar）
-
-| 端点 | 方法 | 说明 |
-| --- | --- | --- |
-| `/health` | GET | 健康检查 |
-| `/ingest/path` | POST | 从文件路径导入（TXT） |
-| `/ingest/paste` | POST | 粘贴导入 |
-| `/summarize` | POST | 对章节列表做摘要（tier: fine / coarse / ultra） |
-| `/style` | POST | 从前 N 章抽取风格向量 + 反 AI 味 |
-| `/context/build` | POST | 从摘要列表构建 25 章分级窗口 |
-| `/continue/plan_turn` | POST | 与 AI 多轮讨论下一章规划（C 动线主用） |
-| `/continue/generate` | POST | 续写主端点；请求体含 `mode`：`auto`（A 动线） / `user_plan`（B 动线） / `ai_plan`（C 动线） |
-| `/consistency/check` | POST | 对续写结果做一致性扫描 |
-
-## 决策摘要
-
-| 决策 | 选择 |
-| --- | --- |
-| 技术栈 | 沿用 Lumina 架构（Swift + Python sidecar），不复制模块 |
-| LLM 后端 | 云端 API 优先（DeepSeek / OpenAI / Anthropic） |
-| 复用策略 | 借鉴思路，重写网文特化版 |
-| 上下文 | 25 章滑动窗口 + 5/10/10 分级（短书全部 fine） |
-| 风格 | 风格向量 + 反 AI 味提示词（3 档强度） |
-| 一致性检查 | MVP 轻量版（LLM 单次扫描），完整 fact-bank 放 P1 |
-| 导入格式 | TXT + 粘贴 |
-| 字数 | 不做硬性约束（生成时给目标区间，可在 UI 调） |
+---
 
 ## 路线图
 
-- [x] Phase 0 — 项目骨架 + Python sidecar + LLM 客户端
-- [x] Phase 0 — Swift macOS 编译通过
-- [ ] Phase 1 — 完整跑通：导入 → 章节切分 → 三档摘要 → 风格提取
-- [ ] Phase 2 — 续写主流程：三选一动线（A 一键 / B 用户规划 / C AI 规划）→ 一致性检查
-- [ ] Phase 3 — 增量导入（用户自己写了几章后再次导入）
-- [ ] P1 — 完整 fact-bank 一致性检查（独立事实库 + 主动校验）
-- [ ] P1 — 离线缓存：导入后保留 chunker/summarize 状态，二次启动秒开
+- [x] Phase 0 — 项目骨架 + sidecar + Swift app
+- [x] Phase 1 — 导入 → 章节切分 → 三档摘要 → 风格提取
+- [x] Phase 2 — 三选一动线续写 + 一致性检查 + AI 重写
+- [x] v0.1.0 — 首个公开发版（macOS DMG/ZIP）
+- [x] v0.1.1 — README 产品体验说明；修复摘要章数显示；推理模型空正文报错
+- [ ] Phase 3 — 增量导入体验打磨、分析缓存秒开
+- [ ] P1 — 完整 fact-bank 一致性（独立事实库 + 续写前预检）
+- [ ] P2 — Windows 版本、EPUB 导入

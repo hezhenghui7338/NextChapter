@@ -28,6 +28,12 @@ struct Book: Identifiable, Codable, Equatable {
         self.createdAt = now
         self.updatedAt = now
     }
+
+    /// 已摘要的章节数（按 chapter_index 去重，不论 tier）。
+    /// 注意：summaries 里同一章会存 fine / coarse / ultra 三条，直接用 summaries.count 会得到 3 倍数。
+    var summarizedChapterCount: Int {
+        Set(summaries.map { $0.chapter_index }).count
+    }
 }
 
 /// 本地书库（简单 JSON 落盘）。

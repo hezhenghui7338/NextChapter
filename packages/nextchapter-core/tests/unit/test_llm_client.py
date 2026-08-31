@@ -88,13 +88,72 @@ def test_null_content_with_reasoning_raises():
             client.chat([LLMMessage("user", "hi")])
 
 
-def test_null_content_without_reasoning_returns_empty():
+def test_empty_string_content_with_reasoning_raises():
+    """回归测试：content=""(空字符串)+ reasoning_content 非空 也会 raise。
+
+    之前 _extract_openai_message_content 只在 raw is None 时检查 reasoning_content,
+    导致 GLM-5.2 等推理模型"思考了但没出正文"时静默返回空字符串,plan_draft /
+    plan_revise / plan_turn / generate 在 UI 上显示空白且 status=200,排查极痛。
+    """
+    settings = LLMSettings(provider="openai", api_key="k", base_url="https://x", model="m")
+    client = LLMClient(settings)
+    payload = {
+        "choices": [{
+            "message": {"role": "assistant", "content": "", "reasoning_content": "思考了一通但 token 打满了"},
+            "finish_reason": "length",
+        }],
+    }
+    with patch.object(client._client, "post", return_value=_make_response(200, payload)):
+        from nextchapter_core.llm.client import LLMError
+        with pytest.raises(LLMError, match="空正文"):
+            client.chat([LLMMessage("user", "hi")])
+
+
+def test_whitespace_only_content_with_reasoning_raises():
+    """content 是纯空白字符(空格/换行)也应视为空。"""
+    settings = LLMSettings(provider="openai", api_key="k", base_url="https://x", model="m")
+    client = LLMClient(settings)
+    payload = {
+        "choices": [{
+            "message": {"role": "assistant", "content": "   \n\t  ", "reasoning_content": "x"},
+        }],
+    }
+    with patch.object(client._client, "post", return_value=_make_response(200, payload)):
+        from nextchapter_core.llm.client import LLMError
+        with pytest.raises(LLMError, match="空正文"):
+            client.chat([LLMMessage("user", "hi")])
+
+
+def test_null_content_without_reasoning_raises():
+    """content=null 且 reasoning 也空：上游真出问题了，必须 raise 不能静默。"""
     settings = LLMSettings(provider="openai", api_key="k", base_url="https://x", model="m")
     client = LLMClient(settings)
     payload = {"choices": [{"message": {"role": "assistant", "content": None}}]}
     with patch.object(client._client, "post", return_value=_make_response(200, payload)):
-        resp = client.chat([LLMMessage("user", "hi")])
-    assert resp.content == ""
+        from nextchapter_core.llm.client import LLMError
+        with pytest.raises(LLMError, match="空正文"):
+            client.chat([LLMMessage("user", "hi")])
+
+
+def test_list_content_with_only_empty_text_raises():
+    """content 是 list,但所有 block 的 text/content 都为空:也 raise。"""
+    settings = LLMSettings(provider="openai", api_key="k", base_url="https://x", model="m")
+    client = LLMClient(settings)
+    payload = {
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": ""},
+                    {"type": "text", "text": "  "},
+                ],
+            },
+        }],
+    }
+    with patch.object(client._client, "post", return_value=_make_response(200, payload)):
+        from nextchapter_core.llm.client import LLMError
+        with pytest.raises(LLMError, match="空正文"):
+            client.chat([LLMMessage("user", "hi")])
 
 
 def test_empty_api_key_raises_before_http():

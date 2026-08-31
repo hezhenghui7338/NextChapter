@@ -80,7 +80,7 @@ struct ContinueView: View {
             ForEach(bookStore.books) { book in
                 VStack(alignment: .leading) {
                     Text(book.title).font(.headline)
-                    Text(book.summaries.isEmpty ? "未分析" : "已分析 · \(book.summaries.count) 章")
+                    Text(book.summaries.isEmpty ? "未分析" : "已分析 · \(book.summarizedChapterCount) 章")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
