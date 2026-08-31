@@ -165,18 +165,34 @@ class LLMClient:
     def _extract_openai_message_content(self, message: Dict[str, Any]) -> str:
         """从 OpenAI 兼容响应里提取 assistant 正文。
 
-        推理/思考模型（如 GLM）可能返回 content=null，正文为空而 reasoning_content 非空。
+        推理/思考模型（如 GLM）可能返回 content 为空：
+        - content=null 且 reasoning_content 非空：典型"只思考不出正文"
+        - content=""（空字符串）且 reasoning_content 非空：同上,但 content 字段类型是 str
+        - 两者都为空：真正的空响应
+
+        三种情况都应该 raise,让上层用 LLMError 转 502 暴露给前端,而不是静默返回空字符串
+        ——后者会让续写/规划在 UI 上显示空白,但 status=200,排查极痛苦。
         """
         raw = message.get("content")
-        if raw is None:
-            reasoning = (message.get("reasoning_content") or "").strip()
+        reasoning = (message.get("reasoning_content") or "").strip()
+
+        def _raise_empty() -> "str":
+            # 推理链非空 → 配额被吃光;否则 → 真正的空响应
             if reasoning:
                 raise LLMError(
                     "模型返回空正文：推理链占满输出配额（常见于推理/思考模型）。"
                     "请换用非推理模型（如 deepseek-chat），或增大 max_tokens / 换模型。"
                 )
-            return ""
+            raise LLMError(
+                "模型返回空正文（content 与 reasoning_content 都为空）。"
+                "通常是上游 502/超时后重试退化为空体，请稍后重试或换模型。"
+            )
+
+        if raw is None:
+            return _raise_empty()
         if isinstance(raw, str):
+            if not raw.strip():
+                return _raise_empty()
             return raw
         if isinstance(raw, list):
             parts: list[str] = []
@@ -185,8 +201,15 @@ class LLMClient:
                     text = block.get("text") or block.get("content")
                     if text:
                         parts.append(str(text))
-            return "".join(parts)
-        return str(raw)
+            joined = "".join(parts)
+            if not joined.strip():
+                return _raise_empty()
+            return joined
+        # 兜底:非 str/list/None 的 content(如 bool/int)不太可能出现
+        coerced = str(raw)
+        if not coerced.strip():
+            return _raise_empty()
+        return coerced
 
     def _parse_json(self, text: str) -> Dict[str, Any]:
         """宽容 JSON 解析：兼容 ```json ... ``` 围栏。"""

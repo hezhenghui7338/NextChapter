@@ -8,7 +8,7 @@ MACOS="$ROOT/apps/macos"
 DIST="$ROOT/dist"
 mkdir -p "$DIST"
 
-VERSION="${NC_VERSION:-0.1.0}"
+VERSION="${NC_VERSION:-0.1.1}"
 echo "==> NextChapter release build v${VERSION}"
 
 # ---- 0. 从 LOGO 生成图标资源 ----
