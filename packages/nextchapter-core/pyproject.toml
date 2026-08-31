@@ -1,0 +1,43 @@
+[project]
+name = "nextchapter-core"
+version = "0.1.0"
+description = "NextChapter 网文续写 sidecar core"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "httpx>=0.27",
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.6",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.4",
+]
+
+[project.scripts]
+nextchapter-core = "nextchapter_core.api.server:run"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["nextchapter_core"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "unit: 纯逻辑单元测试（无 LLM 调用）",
+    "e2e: 端到端流程测试（通过 FastAPI TestClient，使用 mock LLM）",
+    "live: 真实 LLM 集成测试（需要 NC_LLM_API_KEY）",
+]
+addopts = "-ra --strict-markers"

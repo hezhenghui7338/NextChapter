@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+
+# Swift / macOS
+.build/
+.swiftpm/
+*.xcuserstate
+*.xcworkspace
+
+# Build outputs
+dist/
+packages/nextchapter-core/dist/
+packages/nextchapter-core/build/
+
+# OS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+
+# Env / secrets
+.env
+.env.*
