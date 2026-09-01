@@ -4,18 +4,22 @@ import AppKit
 struct SettingsView: View {
     @EnvironmentObject private var settings: AppSettings
     @EnvironmentObject private var sidecar: SidecarManager
+    @EnvironmentObject private var core: CoreClient
     @State private var showAPIKey = false
     @State private var testResult: String?
     @State private var isTesting = false
+
+    private var llmConfigMismatch: Bool {
+        guard let live = sidecar.liveLLMModel else { return false }
+        return live.trimmingCharacters(in: .whitespacesAndNewlines)
+            != settings.llmModel.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 Spacer()
-                Image("AppLogo")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 200, height: 108)
+                AppLogoImage(width: 200, height: 108)
                 Spacer()
             }
             .padding(.bottom, 16)
@@ -37,6 +41,19 @@ struct SettingsView: View {
                 }
                 TextField("Base URL", text: $settings.llmBaseURL)
                 TextField("Model", text: $settings.llmModel)
+                if let liveModel = sidecar.liveLLMModel {
+                    HStack(spacing: 6) {
+                        Text("sidecar 当前模型：")
+                            .foregroundStyle(.secondary)
+                        Text(liveModel)
+                            .font(.system(.caption, design: .monospaced))
+                    }
+                }
+                if llmConfigMismatch {
+                    Text("⚠️ 设置中的模型与 sidecar 不一致。修改 Model / Base URL / API Key 后，请点击 sidecar 区的「重启」。")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
                 HStack {
                     Text("超时")
                     Slider(value: $settings.llmTimeout, in: 30...600, step: 30)
@@ -106,6 +123,8 @@ struct SettingsView: View {
         }
         .padding(20)
         .frame(maxWidth: 720, alignment: .topLeading)
+        .onAppear { Task { await sidecar.refreshHealth() } }
+        .onChange(of: settings.llmProvider) { _, _ in sidecar.restart() }
     }
 
     private func pickSidecarPath() {
@@ -124,15 +143,14 @@ struct SettingsView: View {
         isTesting = true
         defer { isTesting = false }
         testResult = nil
+        await sidecar.refreshHealth()
+        if llmConfigMismatch {
+            testResult = "⚠️ 模型未同步：sidecar=\(sidecar.liveLLMModel ?? "?")，设置=\(settings.llmModel)。请重启 sidecar。"
+            return
+        }
         do {
-            // 简单调用 /health 看 sidecar 是否在跑 + LLM 能不能用
-            let url = sidecar.baseURL.appendingPathComponent("health")
-            let (_, resp) = try await URLSession.shared.data(from: url)
-            guard (resp as? HTTPURLResponse)?.statusCode == 200 else {
-                testResult = "❌ sidecar 未运行"
-                return
-            }
-            testResult = "✅ sidecar 正常，配置已就绪"
+            let ping = try await core.pingLLM()
+            testResult = "✅ LLM 正常（\(ping.model)：\(ping.reply)）"
         } catch {
             testResult = "❌ \(error.localizedDescription)"
         }

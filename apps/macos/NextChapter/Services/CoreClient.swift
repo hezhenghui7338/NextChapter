@@ -10,9 +10,16 @@ final class CoreClient: ObservableObject {
         self.baseURL = baseURL
         let cfg = URLSessionConfiguration.ephemeral
         cfg.timeoutIntervalForRequest = 600
-        cfg.timeoutIntervalForResource = 1200
+        cfg.timeoutIntervalForResource = 7200
         self.session = URLSession(configuration: cfg)
     }
+
+    private static let sseSession: URLSession = {
+        let cfg = URLSessionConfiguration.ephemeral
+        cfg.timeoutIntervalForRequest = 7200
+        cfg.timeoutIntervalForResource = 7200
+        return URLSession(configuration: cfg)
+    }()
 
     // MARK: - 健康
 
@@ -21,6 +28,25 @@ final class CoreClient: ObservableObject {
         let (data, resp) = try await session.data(from: url)
         try Self.assertOK(resp, data: data)
         return (try JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
+    }
+
+    struct LLMPingResponse: Codable {
+        let ok: Bool
+        let model: String
+        let provider: String
+        let reply: String
+    }
+
+    /// 真实调用 LLM，验证 Key / 模型 / 网络。
+    func pingLLM() async throws -> LLMPingResponse {
+        let url = baseURL.appendingPathComponent("llm/ping")
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = "{}".data(using: .utf8)
+        let (data, resp) = try await session.data(for: req)
+        try Self.assertOK(resp, data: data)
+        return try JSONDecoder().decode(LLMPingResponse.self, from: data)
     }
 
     // MARK: - 导入
@@ -129,6 +155,78 @@ final class CoreClient: ObservableObject {
         let (data, resp) = try await session.data(for: req)
         try Self.assertOK(resp, data: data)
         return try JSONDecoder().decode(AnalyzeResponse.self, from: data)
+    }
+
+    struct AnalyzeStartResponse: Codable {
+        let job_id: String
+        let style_description: String
+        let anti_ai_directive: String
+        let style_samples: [String]
+        let total: Int
+        let pending: Int
+    }
+
+    /// 后台逐章摘要（对齐 Lumina）：立即返回 job_id，进度经 SSE 推送。
+    func startAnalyze(
+        bookTitle: String,
+        chapters: [ChapterDTO],
+        indices: [Int]? = nil,
+        existingSummaries: [SummaryDTO] = []
+    ) async throws -> AnalyzeStartResponse {
+        let url = baseURL.appendingPathComponent("analyze/start")
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        var payload: [String: Any] = [
+            "book_title": bookTitle,
+            "chapters": chapters.map { ["index": $0.index, "title": $0.title, "body": $0.body, "char_count": $0.char_count, "kind": $0.kind] },
+            "indices": indices as Any,
+        ]
+        if !existingSummaries.isEmpty {
+            payload["existing_summaries"] = existingSummaries.map {
+                ["chapter_index": $0.chapter_index, "title": $0.title, "tier": $0.tier, "text": $0.text]
+            }
+        }
+        req.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        let (data, resp) = try await session.data(for: req)
+        try Self.assertOK(resp, data: data)
+        return try JSONDecoder().decode(AnalyzeStartResponse.self, from: data)
+    }
+
+    /// 停止后台摘要任务（当前章完成后终止）。
+    func cancelAnalyze(jobId: String) async throws {
+        let url = baseURL.appendingPathComponent("analyze/cancel/\(jobId)")
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = "{}".data(using: .utf8)
+        let (data, resp) = try await session.data(for: req)
+        try Self.assertOK(resp, data: data)
+    }
+
+    /// 订阅分析任务 SSE（chapter_ready / analyze_done / analyze_error / analyze_cancelled）。
+    func subscribeAnalyzeEvents(jobId: String, onEvent: @escaping ([String: Any]) -> Void) -> Task<Void, Never> {
+        Task {
+            var request = URLRequest(url: baseURL.appendingPathComponent("analyze/events/\(jobId)"))
+            request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+            request.timeoutInterval = 7200
+            do {
+                let (bytes, _) = try await Self.sseSession.bytes(for: request)
+                for try await line in bytes.lines {
+                    try Task.checkCancellation()
+                    if line.hasPrefix("data: ") {
+                        let jsonStr = String(line.dropFirst(6))
+                        if let data = jsonStr.data(using: .utf8),
+                           let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                            onEvent(obj)
+                        }
+                    }
+                }
+            } catch {
+                if error is CancellationError { return }
+                onEvent(["type": "analyze_error", "detail": error.localizedDescription])
+            }
+        }
     }
 
     // MARK: - 上下文滑动窗口

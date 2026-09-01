@@ -53,3 +53,8 @@ def test_port_default():
     """Port 必须和 Lumina 错开，避免本地同时跑两个项目冲突。"""
     from nextchapter_core.config import DEFAULT_PORT
     assert DEFAULT_PORT == 18432
+
+
+def test_summary_concurrency_default():
+    from nextchapter_core.config import SUMMARY_CONCURRENCY
+    assert SUMMARY_CONCURRENCY == 8

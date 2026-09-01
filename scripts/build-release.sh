@@ -8,7 +8,7 @@ MACOS="$ROOT/apps/macos"
 DIST="$ROOT/dist"
 mkdir -p "$DIST"
 
-VERSION="${NC_VERSION:-0.1.1}"
+VERSION="${NC_VERSION:-0.1.2}"
 echo "==> NextChapter release build v${VERSION}"
 
 # ---- 0. 从 LOGO 生成图标资源 ----
@@ -99,6 +99,17 @@ if [ -d "$ASSETS_DIR" ]; then
   fi
   rm -rf "$ASSETS_BUILD_DIR" "$ASSETS_PLIST_OUT"
   echo "    ✅ Assets.car ($(du -h "$ASSETS_OUT/Assets.car" | cut -f1))"
+fi
+
+# SwiftPM 资源包（开发态 Bundle.module 与发布态双保险）
+RESOURCE_BUNDLE="$(find "$MACOS/.build" -path "*/release/NextChapter_NextChapter.bundle" -type d 2>/dev/null | head -1)"
+if [[ -n "$RESOURCE_BUNDLE" && -d "$RESOURCE_BUNDLE" ]]; then
+  rm -rf "$ASSETS_OUT/NextChapter_NextChapter.bundle"
+  cp -R "$RESOURCE_BUNDLE" "$ASSETS_OUT/NextChapter_NextChapter.bundle"
+  if [[ -f "$ASSETS_OUT/Assets.car" ]]; then
+    cp "$ASSETS_OUT/Assets.car" "$ASSETS_OUT/NextChapter_NextChapter.bundle/Assets.car"
+  fi
+  echo "    ✅ NextChapter_NextChapter.bundle"
 fi
 
 # 兜底：generate-assets 预生成的 icns（actool 已生成时跳过）

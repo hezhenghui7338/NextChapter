@@ -21,12 +21,33 @@ _ULTRA_TEMPLATE = "本章推进：{advance}。"
 
 def _extract_chapter_title(msg: str) -> str:
     m = re.search(r"【章节】([^\n]+)", msg)
+    if m:
+        return m.group(1).strip()
+    m = re.search(r"章节：([^\n]+)", msg)
     return m.group(1).strip() if m else "unknown"
+
+
+def _mock_json_fine() -> str:
+    return json.dumps(
+        {
+            "sentences": [
+                "本章讲述了 3 个核心事件，主角李青云经历击退黑衣人与救下老者，关键转折在于老者托付剑谱。"
+            ],
+            "bullets": [
+                {"label": "遭遇", "body": "李青云在洛阳遇见黑衣人追杀，出手击退。"},
+                {"label": "转折", "body": "老者托付剑谱，暗示天魔宗阴谋。"},
+                {"label": "悬念", "body": "黑衣人来历不明，后文或再登场。"},
+            ],
+        },
+        ensure_ascii=False,
+    )
 
 
 def build_mock_summaries(messages: List[LLMMessage], kwargs: dict, n: int, tier: str) -> str:
     """给 summarize 端点用的 mock 回调：每章一段摘要。"""
     msg = messages[0].content if messages else ""
+    if "只输出 JSON" in msg and "bullets" in msg:
+        return _mock_json_fine()
     title = _extract_chapter_title(msg)
 
     # all 模式：先 fine（从原文），后 coarse/ultra（从 fine 派生）—— mock 都用 fine 模板即可

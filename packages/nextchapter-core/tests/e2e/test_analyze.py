@@ -9,6 +9,7 @@ from nextchapter_core.summarize import Summarizer
 from nextchapter_core.style import StyleProfiler
 from nextchapter_core.writing import ContinueEngine
 from nextchapter_core.consistency import ConsistencyChecker
+from nextchapter_core.jobs import AnalyzeQueue
 
 
 @pytest.fixture
@@ -19,6 +20,7 @@ def client_with_mock(mock_llm, sample_novel_text):
     server_module.style_profiler = StyleProfiler(mock_llm, server_module.settings.style)
     server_module.continue_engine = ContinueEngine(mock_llm)
     server_module.checker = ConsistencyChecker(mock_llm)
+    server_module.analyze_queue = AnalyzeQueue(server_module.summarizer, server_module.style_profiler)
     return TestClient(server_module.app)
 
 

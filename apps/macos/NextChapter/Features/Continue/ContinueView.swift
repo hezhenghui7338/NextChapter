@@ -486,7 +486,7 @@ struct ContinueView: View {
     /// 阶段 1：未出初稿。一个大按钮 + 简短说明。
     private func aiPlanInitialStage(book: Book) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("AI 会基于最近剧情上下文，从「剧情走向 / 关键场景 / 爽点 / 节奏 / 坑点」五个维度起草一份规划。你可以直接采用、继续编辑，或通过对话要求 AI 优化。")
+            Text("AI 会基于最近剧情上下文，从「剧情走向 / 关键场景 / 爽点 / 节奏 / 坑点」五个维度起草一份极简规划（200 字以内）。你可以直接采用、继续编辑，或通过对话要求 AI 优化。")
                 .font(.callout)
                 .foregroundStyle(.secondary)
             HStack {

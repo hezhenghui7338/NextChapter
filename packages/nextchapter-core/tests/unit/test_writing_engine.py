@@ -84,10 +84,25 @@ def test_plan_draft_outputs_full_plan():
     assert turn.role == "assistant"
     assert "剧情走向" in turn.content
 
+    from nextchapter_core.writing.engine import PLAN_DRAFT_MAX_CHARS
+
     last = llm.calls[-1]
     system_msg = next(m for m in last["messages"] if m["role"] == "system")
     assert "起草规划初稿" in system_msg["content"]
-    assert "500~1500" in system_msg["content"]
+    assert f"{PLAN_DRAFT_MAX_CHARS} 字" in system_msg["content"]
+    assert "500~1500" not in system_msg["content"]
+
+
+def test_plan_draft_truncates_overlong_response():
+    """plan_draft 服务端硬性截断：LLM 超长时不超过 200 字。"""
+    from nextchapter_core.writing.engine import PLAN_DRAFT_MAX_CHARS
+
+    llm = MockLLMClient()
+    llm.queue_response("章" * 500)
+    engine = ContinueEngine(llm)
+    req = ContinueRequest(book_title="测试书", next_chapter_hint="第 4 章")
+    turn = engine.plan_draft(req)
+    assert len(turn.content) == PLAN_DRAFT_MAX_CHARS
 
 
 def test_plan_revise_rewrites_plan_from_feedback():
@@ -260,6 +275,54 @@ def test_target_chars_in_system_prompt():
     engine.generate(req)
     system_msg = next(m for m in llm.calls[-1]["messages"] if m["role"] == "system")
     assert "3000" in system_msg["content"]
+    assert "3900" in system_msg["content"]  # 3000 * 1.3
+
+
+def test_compute_generate_max_tokens_scales_with_target():
+    """max_tokens 应随目标字数缩放，不能固定 4000 下限。"""
+    engine = ContinueEngine(MockLLMClient())
+    low = engine._compute_generate_max_tokens(500)
+    mid = engine._compute_generate_max_tokens(2000)
+    high = engine._compute_generate_max_tokens(5000)
+    assert low < 2500
+    assert low < mid < high
+    assert high <= 16000
+
+
+def test_generate_truncates_overlong_body():
+    """正文远超目标时，服务端应在句边界兜底截断。"""
+    llm = MockLLMClient()
+    overlong = "李青云提剑。" + ("他挥剑斩敌。" * 200)
+    llm.queue_response(f"第四章 反杀之夜\n\n{overlong}")
+    engine = ContinueEngine(llm)
+    req = ContinueRequest(
+        book_title="测试",
+        next_chapter_hint="第 4 章",
+        target_chars=500,
+        mode=ContinueMode.AUTO,
+        context=make_ctx(),
+    )
+    result = engine.generate(req)
+    assert result.char_count <= engine._char_limit(500)
+
+
+def test_generate_skips_continuation_when_at_char_limit():
+    """已达字数上限时不应再自动续写。"""
+    llm = MockLLMClient()
+    body = "他挥剑。" * 150  # 600 字，超过 400*1.3=520 上限
+    llm.queue_response("第四章\n\n" + body, finish_reason="length")
+    llm.queue_response("不应追加的正文。")
+    engine = ContinueEngine(llm)
+    req = ContinueRequest(
+        book_title="测试",
+        next_chapter_hint="第 4 章",
+        target_chars=400,
+        mode=ContinueMode.AUTO,
+    )
+    result = engine.generate(req)
+    assert "不应追加" not in result.body
+    assert llm.call_count == 1
+    assert result.char_count <= engine._char_limit(400)
 
 
 # ---- critique (AI 重写) ----

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import List, Literal, Optional
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, model_validator
 
 from .. import __version__
@@ -16,16 +17,17 @@ from ..config import load_settings
 from ..llm import LLMClient, LLMError
 from ..ingest import import_text, import_paste
 from ..chunker import ChapterChunker
-from ..summarize import Summarizer, SummaryTier
+from ..summarize import Summarizer, SummaryTier, ChapterSummary
 from ..context import ContextWindow
 from ..style import StyleProfiler
 from ..writing import ContinueEngine, ContinueMode, PlanningTurn
 from ..consistency import ConsistencyChecker
+from ..jobs import AnalyzeQueue
 
 log = logging.getLogger("nextchapter.api")
 
 # Swift app 启动时会校验此列表；旧 sidecar 缺少条目会被自动重启
-API_FEATURES = ("plan_draft", "plan_revise", "critique")
+API_FEATURES = ("plan_draft", "plan_revise", "critique", "analyze_async")
 
 
 # ---- 应用 & 启动 ----
@@ -38,6 +40,7 @@ context_window = ContextWindow(settings.context)
 style_profiler = StyleProfiler(llm, settings.style)
 continue_engine = ContinueEngine(llm)
 checker = ConsistencyChecker(llm)
+analyze_queue = AnalyzeQueue(summarizer, style_profiler)
 
 app = FastAPI(title="NextChapter Core", version=__version__)
 
@@ -61,6 +64,22 @@ def health() -> dict:
         "llm_provider": settings.llm.provider,
         "llm_model": settings.llm.model,
         "llm_configured": bool((settings.llm.api_key or "").strip()),
+    }
+
+
+@app.post("/llm/ping")
+def llm_ping() -> dict:
+    """真实调用 LLM，验证 Key / 模型 / 网络是否可用。"""
+    resp = llm.chat(
+        [LLMMessage("user", "请只回复 OK 两个字母，不要其它内容。")],
+        temperature=0,
+        max_tokens=16,
+    )
+    return {
+        "ok": True,
+        "model": settings.llm.model,
+        "provider": settings.llm.provider,
+        "reply": (resp.content or "").strip()[:80],
     }
 
 
@@ -118,6 +137,8 @@ class AnalyzeRequest(BaseModel):
     chapters: List[ChapterDTO]
     # 只对新加的 chapters 做摘要；None = 全部重新生成
     indices: Optional[List[int]] = None
+    # 增量摘要时传入已有 fine 摘要，供滚动上下文
+    existing_summaries: Optional[List[SummaryDTO]] = None
 
 
 class AnalyzeResponse(BaseModel):
@@ -125,6 +146,15 @@ class AnalyzeResponse(BaseModel):
     anti_ai_directive: str
     style_samples: List[str]
     summaries: List[SummaryDTO]  # 三档混在一起，前端按 tier 字段筛选
+
+
+class AnalyzeStartResponse(BaseModel):
+    job_id: str
+    style_description: str
+    anti_ai_directive: str
+    style_samples: List[str]
+    total: int
+    pending: int
 
 
 class StyleRequest(BaseModel):
@@ -366,32 +396,24 @@ def context_build(req: ContextRequest) -> ContextResponse:
 
 @app.post("/analyze", response_model=AnalyzeResponse)
 def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
-    """一步完成：风格 + 三档摘要。
-
-    - 风格：从全书前 3 章抽 few-shot + LLM 描述。
-    - 摘要：先 fine（基于原文），coarse/ultra 从 fine 派生。
-    - 增量：req.indices 非空时只摘要指定章节（风格仍按全书）。
-    """
+    """同步分析（短书/测试用）。长书请用 /analyze/start + SSE。"""
     from ..chunker import Chapter
     chs = [Chapter(index=c.index, title=c.title, body=c.body, kind=c.kind) for c in req.chapters]
     if not chs:
         raise HTTPException(400, "chapters 为空，无法分析")
 
-    # 1) 风格（用全书前 3 章作为样本）
     style_sample = chs[: settings.style.few_shot_chapters]
     profile = style_profiler.profile(style_sample)
 
-    # 2) 摘要：增量 vs 全部
+    prior_fine = _seed_prior_fine(req.existing_summaries)
     if req.indices is not None:
-        target = [c for c in chs if c.index in set(req.indices)]
+        target = sorted(
+            [c for c in chs if c.index in set(req.indices)],
+            key=lambda c: c.index,
+        )
         if not target:
             raise HTTPException(400, "indices 过滤后无章节")
-        results: List = []
-        for ch in target:
-            fine = summarizer.summarize(ch, SummaryTier.FINE)
-            results.append(fine)
-            results.append(summarizer.summarize_from_summary(fine, SummaryTier.COARSE))
-            results.append(summarizer.summarize_from_summary(fine, SummaryTier.ULTRA))
+        results = summarizer.summarize_all_tiers(target, prior_fine=prior_fine)
     else:
         results = summarizer.summarize_all_tiers(chs)
 
@@ -401,6 +423,73 @@ def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
         style_samples=profile.samples,
         summaries=[SummaryDTO(chapter_index=s.chapter_index, title=s.title, tier=s.tier.value, text=s.text) for s in results],
     )
+
+
+@app.post("/analyze/start", response_model=AnalyzeStartResponse)
+def analyze_start(req: AnalyzeRequest) -> AnalyzeStartResponse:
+    """后台逐章摘要（对齐 Lumina）：立即返回 job_id，进度经 SSE 推送。"""
+    from ..chunker import Chapter
+    chs = [Chapter(index=c.index, title=c.title, body=c.body, kind=c.kind) for c in req.chapters]
+    if not chs:
+        raise HTTPException(400, "chapters 为空，无法分析")
+    try:
+        job = analyze_queue.start(
+            req.book_title,
+            chs,
+            req.indices,
+            extract_style=True,
+            prior_fine=_seed_prior_fine(req.existing_summaries),
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    return AnalyzeStartResponse(
+        job_id=job.job_id,
+        style_description=job.style_description,
+        anti_ai_directive=job.anti_ai_directive,
+        style_samples=job.style_samples,
+        total=job.total_count,
+        pending=job.total_count,
+    )
+
+
+@app.get("/analyze/events/{job_id}")
+def analyze_events(job_id: str) -> StreamingResponse:
+    """SSE：chapter_ready / analyze_progress / analyze_done / analyze_error / analyze_cancelled。"""
+    if analyze_queue.get_job(job_id) is None:
+        raise HTTPException(404, f"job not found: {job_id}")
+    return StreamingResponse(
+        analyze_queue.iter_events(job_id),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/analyze/cancel/{job_id}")
+def analyze_cancel(job_id: str) -> dict:
+    """停止后台摘要：当前章完成后终止，已完成的章节摘要保留。"""
+    if not analyze_queue.cancel(job_id):
+        job = analyze_queue.get_job(job_id)
+        if job is None:
+            raise HTTPException(404, f"job not found: {job_id}")
+        raise HTTPException(409, f"job already {job.status}")
+    return {"ok": True, "job_id": job_id}
+
+
+def _seed_prior_fine(existing: Optional[List[SummaryDTO]]) -> List[ChapterSummary]:
+    if not existing:
+        return []
+    fine = [
+        ChapterSummary(
+            chapter_index=s.chapter_index,
+            title=s.title,
+            tier=SummaryTier.FINE,
+            text=s.text,
+        )
+        for s in existing
+        if s.tier == "fine"
+    ]
+    fine.sort(key=lambda x: x.chapter_index)
+    return fine
 
 
 @app.post("/continue/plan_turn", response_model=PlanTurnResponse)
@@ -422,7 +511,7 @@ def continue_plan_turn(req: PlanTurnRequest) -> PlanTurnResponse:
 
 @app.post("/continue/plan_draft", response_model=PlanTurnResponse)
 def continue_plan_draft(req: PlanDraftRequest) -> PlanTurnResponse:
-    """C 动线：一键生成规划初稿（完整 5 维，非聊天模式）。"""
+    """C 动线：一键生成规划初稿（5 维极简纲要，硬性 ≤200 字）。"""
     from ..writing import ContinueRequest
     fake_style = _fake_style_profile(req.style_text)
     fake_ctx = _fake_windowed_context(req.context_text)

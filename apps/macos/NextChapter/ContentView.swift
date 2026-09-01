@@ -51,10 +51,7 @@ struct ContentView: View {
 
     private var bootstrappingView: some View {
         VStack(spacing: 20) {
-            Image("AppLogo")
-                .resizable()
-                .scaledToFit()
-                .frame(width: 280, height: 150)
+            AppLogoImage(width: 280, height: 150)
             ProgressView()
             Text("正在启动 NextChapter Core…")
                 .foregroundStyle(.secondary)
@@ -107,6 +104,26 @@ struct ContentView: View {
             SettingsView()
                 .tabItem { Label(AppTab.settings.title, systemImage: AppTab.settings.icon) }
                 .tag(AppTab.settings)
+        }
+        .onChange(of: sidecar.isBootstrapping) { _, bootstrapping in
+            if !bootstrapping { applyDemoEnvironmentIfNeeded() }
+        }
+        .onAppear {
+            if !sidecar.isBootstrapping { applyDemoEnvironmentIfNeeded() }
+        }
+    }
+
+    /// 录屏 / 演示脚本可通过环境变量定位初始 Tab 与书目（见 docs/SUBMISSION.md）。
+    private func applyDemoEnvironmentIfNeeded() {
+        if let raw = ProcessInfo.processInfo.environment["NC_DEMO_TAB"] {
+            switch raw.lowercased() {
+            case "settings": nav.tab = .settings
+            case "continue", "continuechapter", "续章": nav.tab = .continueChapter
+            default: nav.tab = .library
+            }
+        }
+        if let bookId = ProcessInfo.processInfo.environment["NC_DEMO_BOOK"], !bookId.isEmpty {
+            nav.selectedBookId = bookId
         }
     }
 }

@@ -26,3 +26,6 @@ packages/nextchapter-core/build/
 # Env / secrets
 .env
 .env.*
+
+# Video build intermediates
+docs/video-work/

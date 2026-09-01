@@ -11,7 +11,7 @@ final class AppSettings: ObservableObject {
     @AppStorage("nc.llm.apiKey") var llmAPIKey: String = ""
     @AppStorage("nc.llm.baseURL") var llmBaseURL: String = "https://api.deepseek.com/v1"
     @AppStorage("nc.llm.model") var llmModel: String = "deepseek-chat"
-    @AppStorage("nc.llm.timeout") var llmTimeout: Double = 120
+    @AppStorage("nc.llm.timeout") var llmTimeout: Double = 180
     @AppStorage("nc.llm.antiAI") var antiAIPreset: String = "default"
 
     // ---- 上下文窗口 ----
