@@ -5,7 +5,17 @@
 
 macOS 14+ · [Latest Release](https://github.com/hezhenghui7338/NextChapter/releases/latest)
 
-[产品体验](#产品体验) · [续写动线](#三种续写动线) · [下载安装](#下载安装) · [开发者](#开发者)
+[产品演示](#产品演示) · [产品体验](#产品体验) · [续写动线](#三种续写动线) · [下载安装](#下载安装) · [开发者](#开发者)
+
+---
+
+## 产品演示
+
+完整使用流程录屏（约 3 分 30 秒）：配置 LLM → 导入作品 → 开始分析 → 一键续写 → 审阅收章。
+
+<video src="docs/NextChapter-demo.mp4" controls width="100%">
+  <a href="docs/NextChapter-demo.mp4">下载演示视频</a>
+</video>
 
 ---
 
@@ -249,6 +259,7 @@ cd apps/macos && swift run              # 另一个终端
 - [x] Phase 2 — 三选一动线续写 + 一致性检查 + AI 重写
 - [x] v0.1.0 — 首个公开发版（macOS DMG/ZIP）
 - [x] v0.1.1 — README 产品体验说明；修复摘要章数显示；推理模型空正文报错
+- [x] v0.1.2 — 异步逐章摘要（SSE 进度 + 停止）；设置页 LLM 连通性检测；演示录屏与提交文档
 - [ ] Phase 3 — 增量导入体验打磨、分析缓存秒开
 - [ ] P1 — 完整 fact-bank 一致性（独立事实库 + 续写前预检）
 - [ ] P2 — Windows 版本、EPUB 导入

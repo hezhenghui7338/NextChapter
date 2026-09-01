@@ -20,7 +20,7 @@ from nextchapter_core.llm import LLMClient, LLMMessage, LLMResponse
 class MockLLMClient(LLMClient):
     """不发起任何 HTTP 调用的 LLM 客户端。"""
 
-    _queue: List[str] = field(default_factory=list)
+    _queue: List[str | tuple[str, str]] = field(default_factory=list)
     _callback: Callable[[List[LLMMessage], dict], str] | None = None
     calls: List[dict] = field(default_factory=list)
     _default_response: str = "ok"
@@ -36,8 +36,11 @@ class MockLLMClient(LLMClient):
         self._callback = None
         self.calls = []
 
-    def queue_response(self, text: str) -> "MockLLMClient":
-        self._queue.append(text)
+    def queue_response(self, text: str, *, finish_reason: str = "stop") -> "MockLLMClient":
+        if finish_reason == "stop":
+            self._queue.append(text)
+        else:
+            self._queue.append((text, finish_reason))
         return self
 
     def set_callback(self, fn: Callable[[List[LLMMessage], dict], str]) -> "MockLLMClient":
@@ -52,27 +55,35 @@ class MockLLMClient(LLMClient):
     def call_count(self) -> int:
         return len(self.calls)
 
-    def chat(self, messages, *, temperature=0.8, max_tokens=None, response_format=None):
+    def chat(self, messages, *, temperature=0.8, max_tokens=None, response_format=None, timeout=None):
         # 记录调用
         self.calls.append({
             "messages": [{"role": m.role, "content": m.content} for m in messages],
             "temperature": temperature,
             "max_tokens": max_tokens,
             "response_format": response_format,
+            "timeout": timeout,
         })
 
         if self._callback is not None:
             kwargs = {"temperature": temperature, "max_tokens": max_tokens, "response_format": response_format}
             text = self._callback(messages, kwargs)
+            finish_reason = "stop"
         elif self._queue:
-            text = self._queue.pop(0)
+            item = self._queue.pop(0)
+            if isinstance(item, tuple):
+                text, finish_reason = item
+            else:
+                text, finish_reason = item, "stop"
         else:
             text = self._default_response
+            finish_reason = "stop"
 
         return LLMResponse(
             content=text,
             model="mock-model",
             usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            finish_reason=finish_reason,
         )
 
     def close(self) -> None:

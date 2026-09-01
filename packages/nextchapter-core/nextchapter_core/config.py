@@ -20,7 +20,7 @@ class LLMSettings:
     api_key: str = ""
     base_url: str = "https://api.deepseek.com/v1"
     model: str = "deepseek-chat"
-    timeout: float = 120.0
+    timeout: float = 180.0
     max_retries: int = 3
 
     @classmethod
@@ -30,9 +30,20 @@ class LLMSettings:
             api_key=os.getenv("NC_LLM_API_KEY", ""),
             base_url=os.getenv("NC_LLM_BASE_URL", "https://api.deepseek.com/v1"),
             model=os.getenv("NC_LLM_MODEL", "deepseek-chat"),
-            timeout=float(os.getenv("NC_LLM_TIMEOUT", "120")),
+            timeout=float(os.getenv("NC_LLM_TIMEOUT", "180")),
             max_retries=int(os.getenv("NC_LLM_MAX_RETRIES", "3")),
         )
+
+
+# 摘要策略（对齐 Lumina segment 参数）
+CHAPTER_TEXT_MAX_CHARS = int(os.getenv("NC_CHAPTER_TEXT_MAX", "4000"))
+SUMMARY_CONTEXT_MAX_CHARS = int(os.getenv("NC_SUMMARY_CONTEXT_MAX", "1600"))
+SUMMARY_CONTEXT_QUERY_LIMIT = int(os.getenv("NC_SUMMARY_CONTEXT_LIMIT", "8"))
+SUMMARY_LLM_MAX_RETRIES = int(os.getenv("NC_SUMMARY_LLM_RETRIES", "3"))
+SUMMARY_SEGMENT_TIMEOUT_SECONDS = float(os.getenv("NC_SUMMARY_TIMEOUT", "180"))
+SUMMARY_FINE_MAX_TOKENS = int(os.getenv("NC_SUMMARY_FINE_TOKENS", "768"))
+SUMMARY_DERIVED_MAX_TOKENS = int(os.getenv("NC_SUMMARY_DERIVED_TOKENS", "400"))
+SUMMARY_CONCURRENCY = max(1, int(os.getenv("NC_SUMMARY_CONCURRENCY", "8")))
 
 
 @dataclass

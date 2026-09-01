@@ -106,11 +106,7 @@ struct LibraryView: View {
             BookDetailView(book: book)
         } else {
             VStack(spacing: 20) {
-                Image("AppLogo")
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: 360, height: 196)
-                    .opacity(0.85)
+                AppLogoImage(width: 360, height: 196, opacity: 0.85)
                 Text("选择或导入一部作品开始")
                     .font(.title3)
                     .foregroundStyle(.secondary)

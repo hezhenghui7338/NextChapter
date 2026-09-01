@@ -32,15 +32,17 @@ sips -s format png "$SOURCE" --out "$LOGO_SET/logo.png" >/dev/null
 sips -z 1536 2816 "$LOGO_SET/logo.png" --out "$LOGO_SET/logo@2x.png" >/dev/null
 cp "$LOGO_SET/logo.png" "$DOCS_ASSETS/logo.png"
 
-# AppIcon：从 LOGO 中心裁成正方形
+# AppIcon：从 LOGO 顶部居中裁出图标区域（书 + AI），再缩成 1024×1024
+# 注意：sips --cropOffset 顺序是 offsetY offsetX（不是 X Y）
 SQUARE="$(mktemp).png"
 sips -s format png "$SOURCE" --out "$SQUARE" >/dev/null
-# 先缩到 1024 宽，再居中裁 1024×1024（保留图标主体）
-sips -Z 1024 "$SQUARE" >/dev/null
 W=$(sips -g pixelWidth "$SQUARE" | awk '/pixelWidth/ {print $2}')
 H=$(sips -g pixelHeight "$SQUARE" | awk '/pixelHeight/ {print $2}')
-CROP=$(python3 -c "print(max(0, ($W - $H) // 2))")
-sips -c "$H" "$H" --cropOffset "$CROP" 0 "$SQUARE" >/dev/null
+ICON_SIDE=$(( H * 62 / 100 ))
+if (( ICON_SIDE > W )); then ICON_SIDE=$W; fi
+CROP_X=$(( (W - ICON_SIDE) / 2 ))
+sips -c "$ICON_SIDE" "$ICON_SIDE" --cropOffset 0 "$CROP_X" "$SQUARE" >/dev/null
+sips -z 1024 1024 "$SQUARE" >/dev/null
 cp "$SQUARE" "$DOCS_ASSETS/logo-square.png"
 
 declare -a SIZES=(16 32 128 256 512)

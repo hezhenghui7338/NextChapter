@@ -13,6 +13,9 @@ final class SidecarManager: ObservableObject {
     @Published var userStopped = false
     @Published var launchError: String?
     @Published var resolvedMode: String = "—"
+    /// sidecar 进程当前实际使用的 LLM 配置（来自 /health，可能与设置面板不同步）
+    @Published var liveLLMModel: String?
+    @Published var liveLLMProvider: String?
 
     private var process: Process?
     private let settings: AppSettings
@@ -20,12 +23,14 @@ final class SidecarManager: ObservableObject {
     private let healthPollAttempts = 60
     private let healthPollDelayNs: UInt64 = 500_000_000  // 0.5s
     /// 与 Python sidecar `API_FEATURES` 对齐；缺任一即视为旧版
-    private let requiredSidecarFeatures = ["plan_draft", "plan_revise", "critique"]
+    private let requiredSidecarFeatures = ["plan_draft", "plan_revise", "critique", "analyze_async"]
 
     private struct HealthResponse: Decodable {
         let status: String
         let features: [String]?
         let llm_configured: Bool?
+        let llm_model: String?
+        let llm_provider: String?
     }
 
     init(settings: AppSettings) {
@@ -53,6 +58,7 @@ final class SidecarManager: ObservableObject {
         if await probeCompatibleSidecar() {
             isRunning = true
             resolvedMode = "external (already running)"
+            await refreshHealth()
             return
         }
 
@@ -97,6 +103,7 @@ final class SidecarManager: ObservableObject {
                 if await waitForHealth() {
                     isRunning = true
                     launchError = nil
+                    await refreshHealth()
                     return
                 }
                 process?.terminate()
@@ -125,7 +132,20 @@ final class SidecarManager: ObservableObject {
         }
         isRunning = false
         userStopped = false
+        liveLLMModel = nil
+        liveLLMProvider = nil
         Task { await ensureRunning() }
+    }
+
+    /// 拉取 /health，更新 liveLLMModel 等字段。
+    func refreshHealth() async {
+        guard let health = await probeHealth() else {
+            liveLLMModel = nil
+            liveLLMProvider = nil
+            return
+        }
+        liveLLMModel = health.llm_model
+        liveLLMProvider = health.llm_provider
     }
 
     // MARK: - internals

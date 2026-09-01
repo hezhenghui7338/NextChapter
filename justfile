@@ -36,15 +36,15 @@ core-bg:
 core-stop:
     ./scripts/stop-sidecar.sh
 
-# 启动 macOS app（前台）
+# 启动 macOS app（前台，含图标资源编译）
 app:
-    cd apps/macos && swift run
+    ./scripts/run-macos.sh debug
 
 # 完整开发启动：后台 sidecar + 前台 app
 dev: core-bg
     @echo "==> Sidecar started on http://127.0.0.1:18432"
     @echo "==> Launching macOS app..."
-    cd apps/macos && swift run
+    ./scripts/run-macos.sh debug
 
 # ---------- 测试 ----------
 
@@ -90,7 +90,12 @@ ci: test
 
 # 编译 macOS app（debug 模式，不打包 .app）
 build-app:
+    ./scripts/generate-assets.sh
     cd apps/macos && swift build
+
+# 从 logo.jpeg 生成 AppLogo / AppIcon 资源
+assets:
+    ./scripts/generate-assets.sh
 
 # 打包 .app bundle（需要完整 Xcode）
 build-app-bundle:

@@ -11,9 +11,10 @@ let package = Package(
         .executableTarget(
             name: "NextChapter",
             path: "NextChapter",
-            exclude: ["README.md", "AppIcon.icns"],
+            exclude: ["README.md", "Resources"],
             resources: [
                 .process("Assets.xcassets"),
+                .copy("AppIcon.icns"),
             ],
             linkerSettings: [
                 .linkedFramework("AppKit"),

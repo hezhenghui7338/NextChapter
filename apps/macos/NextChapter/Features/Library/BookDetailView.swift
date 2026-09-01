@@ -8,7 +8,11 @@ struct BookDetailView: View {
     @State private var isIncrementalSummarizing = false
     @State private var analyzeError: String?
     @State private var incrementalError: String?
-    @State private var displayMode: ChapterDisplayMode = .summary
+    @State private var analyzeProgress: String?
+    @State private var analyzeEventTask: Task<Void, Never>?
+    @State private var currentAnalyzeJobId: String?
+    @State private var analyzeFinish: ((Result<Void, Error>) -> Void)?
+    @State private var displayMode: ChapterDisplayMode = .original
     @State private var expandedChapterIndexes: Set<Int> = []
 
     enum ChapterDisplayMode: String, CaseIterable, Identifiable {
@@ -34,8 +38,19 @@ struct BookDetailView: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                if isAnalyzing { ProgressView() }
-                if isIncrementalSummarizing { ProgressView() }
+                if isAnalyzing || isIncrementalSummarizing {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                        Button {
+                            stopAnalyze()
+                        } label: {
+                            Label("停止摘要", systemImage: "stop.fill")
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(.red)
+                        .help("停止当前摘要任务，已完成的章节摘要会保留")
+                    }
+                }
 
                 // 继续摘要：仅当存在未摘要章节时显示
                 if !pendingChapters.isEmpty {
@@ -70,15 +85,7 @@ struct BookDetailView: View {
 
             Divider()
 
-            if book.summaries.isEmpty && displayMode == .summary {
-                ContentUnavailableView(
-                    "尚未分析",
-                    systemImage: "sparkles",
-                    description: Text("点击「开始分析」对全书做滚动摘要与风格提取。这会调用云端 LLM（DeepSeek/Claude）。")
-                )
-            } else {
-                chapterList
-            }
+            chapterList
 
             if let err = analyzeError {
                 Text(err)
@@ -90,9 +97,38 @@ struct BookDetailView: View {
                     .foregroundStyle(.red)
                     .font(.callout)
             }
+            if let progress = analyzeProgress {
+                Text(progress)
+                    .foregroundStyle(.secondary)
+                    .font(.callout)
+            }
         }
         .padding(20)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .onAppear { syncDisplayMode() }
+        .onChange(of: book.id) { _, _ in syncDisplayMode() }
+        .onDisappear { stopAnalyze() }
+    }
+
+    private func stopAnalyze() {
+        analyzeEventTask?.cancel()
+        analyzeEventTask = nil
+        if let jobId = currentAnalyzeJobId {
+            let id = jobId
+            Task { try? await core.cancelAnalyze(jobId: id) }
+        }
+        currentAnalyzeJobId = nil
+        if let finish = analyzeFinish {
+            analyzeFinish = nil
+            finish(.failure(CancellationError()))
+        }
+        isAnalyzing = false
+        isIncrementalSummarizing = false
+        analyzeProgress = nil
+    }
+
+    private func syncDisplayMode() {
+        displayMode = book.summaries.isEmpty ? .original : .summary
     }
 
     private var chapterList: some View {
@@ -166,8 +202,8 @@ struct BookDetailView: View {
 
             switch displayMode {
             case .summary:
-                if let sum = book.summaries.first(where: { $0.chapter_index == ch.index }) {
-                    Text(sum.text)
+                if let sum = book.summaries.first(where: { $0.chapter_index == ch.index && $0.tier == "fine" }) {
+                    Text(normalizeSummaryText(sum.text))
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .lineLimit(isExpanded ? nil : 4)
@@ -198,6 +234,13 @@ struct BookDetailView: View {
         .padding(.vertical, 4)
     }
 
+    /// 修复旧版 render 把 sentences 字符串逐字 join 成多行的问题。
+    private func normalizeSummaryText(_ text: String) -> String {
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
+        guard lines.count >= 4, lines.allSatisfy({ $0.count == 1 }) else { return text }
+        return lines.joined()
+    }
+
     private func toggleExpand(_ index: Int) {
         if expandedChapterIndexes.contains(index) {
             expandedChapterIndexes.remove(index)
@@ -207,54 +250,132 @@ struct BookDetailView: View {
     }
 
     private func analyze() async {
-        isAnalyzing = true
-        defer { isAnalyzing = false }
-        analyzeError = nil
-        do {
-            // 一步：风格 + 三档摘要（coarse/ultra 从 fine 派生，省 token）
-            let resp = try await core.analyze(bookTitle: book.title, chapters: book.chapters)
-            var updated = book
-            updated.styleDescription = resp.style_description
-            updated.antiAIDirective = resp.anti_ai_directive
-            updated.styleSamples = resp.style_samples
-            updated.summaries = resp.summaries
-            bookStore.update(updated)
-        } catch {
-            analyzeError = "分析失败：\(error.localizedDescription)"
-        }
+        await runAnalyzeAsync(indices: nil, replaceExisting: true, isIncremental: false)
     }
 
-    /// 增量摘要：只对还没摘要的章节调 /analyze，风格不变，结果合并回 book.summaries。
-    /// 老章节摘要不动。
     private func continueSummarize() async {
         let toSummarize = pendingChapters
         guard !toSummarize.isEmpty else { return }
-        isIncrementalSummarizing = true
-        defer { isIncrementalSummarizing = false }
-        incrementalError = nil
+        await runAnalyzeAsync(
+            indices: toSummarize.map { $0.index },
+            replaceExisting: false,
+            isIncremental: true
+        )
+    }
+
+    /// 后台逐章摘要（Lumina 式 SSE），避免长书 HTTP 超时。
+    private func runAnalyzeAsync(indices: [Int]?, replaceExisting: Bool, isIncremental: Bool) async {
+        if isIncremental {
+            isIncrementalSummarizing = true
+            incrementalError = nil
+        } else {
+            isAnalyzing = true
+            analyzeError = nil
+        }
+        analyzeProgress = "正在启动分析…"
+        analyzeEventTask?.cancel()
+
+        defer {
+            if isIncremental { isIncrementalSummarizing = false }
+            else { isAnalyzing = false }
+        }
+
         do {
-            let resp = try await core.analyze(
+            let existing = replaceExisting ? [] : book.summaries.filter { $0.tier == "fine" }
+            let start = try await core.startAnalyze(
                 bookTitle: book.title,
                 chapters: book.chapters,
-                indices: toSummarize.map { $0.index }
+                indices: indices,
+                existingSummaries: existing
             )
-            // 用 chapter_index + tier 合并：避免重复（pending 章节理论上没摘要，但保险）
-            var existingKeys = Set(book.summaries.map { "\($0.chapter_index)-\($0.tier)" })
-            var merged = book.summaries
-            for s in resp.summaries where !existingKeys.contains("\(s.chapter_index)-\(s.tier)") {
-                merged.append(s)
-                existingKeys.insert("\(s.chapter_index)-\(s.tier)")
-            }
-            // 按 chapter_index + tier 排序，保持稳定顺序
-            merged.sort {
-                if $0.chapter_index != $1.chapter_index { return $0.chapter_index < $1.chapter_index }
-                return tierOrder($0.tier) < tierOrder($1.tier)
-            }
+
             var updated = book
-            updated.summaries = merged
+            if replaceExisting {
+                updated.summaries = []
+            }
+            updated.styleDescription = start.style_description
+            updated.antiAIDirective = start.anti_ai_directive
+            updated.styleSamples = start.style_samples
             bookStore.update(updated)
+            currentAnalyzeJobId = start.job_id
+            analyzeProgress = "摘要中 0/\(start.total) 章…"
+
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+                var finished = false
+                analyzeFinish = { result in
+                    guard !finished else { return }
+                    finished = true
+                    analyzeFinish = nil
+                    switch result {
+                    case .success:
+                        cont.resume()
+                    case .failure(let err):
+                        cont.resume(throwing: err)
+                    }
+                }
+                analyzeEventTask = core.subscribeAnalyzeEvents(jobId: start.job_id) { event in
+                    Task { @MainActor in
+                        guard let type = event["type"] as? String else { return }
+                        switch type {
+                        case "chapter_ready":
+                            mergeChapterSummaries(from: event, into: &updated)
+                            bookStore.update(updated)
+                            if let done = event["chapter_index"] as? Int {
+                                let count = updated.summarizedChapterCount
+                                analyzeProgress = "摘要中 · 已完成第 \(done + 1) 章（共 \(count)/\(book.chapters.count)）"
+                            }
+                        case "analyze_progress":
+                            if let done = event["done"] as? Int, let total = event["total"] as? Int {
+                                analyzeProgress = "摘要中 \(done)/\(total) 章…"
+                            }
+                        case "analyze_done":
+                            analyzeProgress = nil
+                            analyzeFinish?(.success(()))
+                        case "analyze_cancelled":
+                            analyzeProgress = nil
+                            analyzeFinish?(.success(()))
+                        case "analyze_error":
+                            analyzeProgress = nil
+                            let detail = (event["detail"] as? String) ?? "未知错误"
+                            analyzeFinish?(.failure(NSError(
+                                domain: "NextChapter", code: 502,
+                                userInfo: [NSLocalizedDescriptionKey: detail]
+                            )))
+                        default:
+                            break
+                        }
+                    }
+                }
+            }
+            currentAnalyzeJobId = nil
+        } catch is CancellationError {
+            analyzeProgress = nil
         } catch {
-            incrementalError = "继续摘要失败：\(error.localizedDescription)"
+            analyzeProgress = nil
+            if isIncremental {
+                incrementalError = "继续摘要失败：\(error.localizedDescription)"
+            } else {
+                analyzeError = "分析失败：\(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func mergeChapterSummaries(from event: [String: Any], into book: inout Book) {
+        guard let rows = event["summaries"] as? [[String: Any]] else { return }
+        var keys = Set(book.summaries.map { "\($0.chapter_index)-\($0.tier)" })
+        for row in rows {
+            guard let idx = row["chapter_index"] as? Int,
+                  let title = row["title"] as? String,
+                  let tier = row["tier"] as? String,
+                  let text = row["text"] as? String else { continue }
+            let key = "\(idx)-\(tier)"
+            guard !keys.contains(key) else { continue }
+            book.summaries.append(.init(chapter_index: idx, title: title, tier: tier, text: text))
+            keys.insert(key)
+        }
+        book.summaries.sort {
+            if $0.chapter_index != $1.chapter_index { return $0.chapter_index < $1.chapter_index }
+            return tierOrder($0.tier) < tierOrder($1.tier)
         }
     }
 

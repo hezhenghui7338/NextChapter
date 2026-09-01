@@ -164,6 +164,52 @@ def test_empty_api_key_raises_before_http():
         client.chat([LLMMessage("user", "hi")])
 
 
+def test_list_content_skips_thinking_blocks():
+    settings = LLMSettings(provider="openai", api_key="k", base_url="https://x", model="m")
+    client = LLMClient(settings)
+    payload = {
+        "choices": [{
+            "message": {
+                "content": [
+                    {"type": "thinking", "text": "思考中…"},
+                    {"type": "text", "text": "正文在这里"},
+                ],
+            },
+        }],
+    }
+    with patch.object(client._client, "post", return_value=_make_response(200, payload)):
+        resp = client.chat([LLMMessage("user", "hi")])
+    assert resp.content == "正文在这里"
+
+
+def test_choice_text_legacy_field():
+    settings = LLMSettings(provider="openai", api_key="k", base_url="https://x", model="m")
+    client = LLMClient(settings)
+    payload = {"choices": [{"text": "legacy 正文", "message": {"content": ""}}]}
+    with patch.object(client._client, "post", return_value=_make_response(200, payload)):
+        resp = client.chat([LLMMessage("user", "hi")])
+    assert resp.content == "legacy 正文"
+
+
+def test_empty_choices_raises_llm_error():
+    settings = LLMSettings(provider="openai", api_key="k", base_url="https://x", model="m")
+    client = LLMClient(settings)
+    with patch.object(client._client, "post", return_value=_make_response(200, {"choices": []})):
+        from nextchapter_core.llm.client import LLMError
+        with pytest.raises(LLMError, match="空 choices"):
+            client.chat([LLMMessage("user", "hi")])
+
+
+def test_flash_model_sends_disable_thinking():
+    settings = LLMSettings(provider="openai", api_key="k", base_url="https://x", model="DeepSeek-V4-Flash")
+    client = LLMClient(settings)
+    payload = {"choices": [{"message": {"content": "ok"}}]}
+    with patch.object(client._client, "post", return_value=_make_response(200, payload)) as mock_post:
+        client.chat([LLMMessage("user", "hi")])
+    body = mock_post.call_args.kwargs["json"]
+    assert body.get("enable_thinking") is False
+
+
 def test_fake_windowed_context_uses_rendered_override():
     from nextchapter_core.api.server import _fake_windowed_context
     ctx = _fake_windowed_context("【近期剧情】\n· 第一章：测试")

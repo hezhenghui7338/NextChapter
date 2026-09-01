@@ -5,7 +5,8 @@
 2. generate: 依据规划 + 上下文 + 风格 → 生成下一章正文
 3. critique: 对已生成的草稿给修改意见 + 建议重写版
 
-字数不做硬性约束（按用户决策灵活处理），但 prompt 里给目标区间。
+字数以用户设置的目标为准，允许 ±30% 浮动；通过 max_tokens 约束生成长度，
+超长时在句/段边界兜底截断（与 plan_draft 同理）。
 
 generate 阶段支持三种互斥动线（PRD F10a/b/c）：
 - AUTO       A 动线：完全不规划，AI 基于上下文即兴
@@ -25,6 +26,12 @@ from ..llm import LLMClient, LLMMessage
 from ..style import StyleProfile, StyleProfiler
 
 log = logging.getLogger("nextchapter.continue")
+
+# C 动线 plan_draft：规划初稿硬性字数上限（含标点）
+PLAN_DRAFT_MAX_CHARS = 200
+
+# 续写正文：相对 target_chars 的浮动上限（PRD F11：±30%）
+GENERATE_CHAR_FLOAT_RATIO = 1.3
 
 
 class ContinueMode(str, Enum):
@@ -96,20 +103,23 @@ class ContinueEngine:
         """一键生成规划初稿（C 动线入口专用）。
 
         与 plan_turn 的关键区别：
-        - plan_draft → 直接输出完整 5 维规划初稿（500~1500 字）
+        - plan_draft → 直接输出 5 维规划初稿（硬性 ≤200 字）
         - plan_turn  → 聊天模式，给简短建议（≤300 字）
         """
         system_prompt = self._draft_system(req)
         user_prompt = (
-            f"请为《{req.book_title}》{req.next_chapter_hint}起草一份完整规划初稿，"
+            f"请为《{req.book_title}》{req.next_chapter_hint}起草一份极简规划初稿，"
             f"覆盖五个维度：剧情走向 / 关键场景 / 爽点 / 节奏 / 坑点。"
+            f"总字数不超过 {PLAN_DRAFT_MAX_CHARS} 字，每个维度一两句短语即可。"
         )
         messages = [
             LLMMessage("system", system_prompt),
             LLMMessage("user", user_prompt),
         ]
-        resp = self.llm.chat(messages, temperature=0.7, max_tokens=2400)
-        return PlanningTurn(role="assistant", content=(resp.content or "").strip())
+        # 200 字正文 + 推理模型 reasoning buffer
+        resp = self.llm.chat(messages, temperature=0.7, max_tokens=600)
+        content = self._truncate_plan_draft((resp.content or "").strip())
+        return PlanningTurn(role="assistant", content=content)
 
     def plan_turn(self, req: ContinueRequest, user_message: str) -> PlanningTurn:
         """与用户讨论下一章规划。"""
@@ -156,9 +166,9 @@ class ContinueEngine:
 
     # ---- 一键续写 ----
 
-    # max_tokens 估算：中文 1 字 ≈ 1 token（按平均），目标字数的 1.5x + 推理模型留 2x buffer
-    GENERATE_TOKEN_RATIO = 2.0  # 给推理链留余量；非推理模型也能装下略长的目标
-    GENERATE_MIN_TOKENS = 4000
+    # max_tokens 估算：中文 1 字 ≈ 1 token；按浮动上限 × ratio 给推理链留余量
+    GENERATE_TOKEN_RATIO = 2.0
+    GENERATE_EXTRA_TOKENS = 300  # 标题 / 格式
     GENERATE_MAX_TOKENS = 16000
 
     def generate(self, req: ContinueRequest) -> ContinueResult:
@@ -167,6 +177,7 @@ class ContinueEngine:
         # - USER_PLAN / AI_PLAN: 注入最终规划 + 强调「严格按规划写，不擅自发散」
         system_prompt = self._generation_system(req)
         user_prompt = self._generation_user(req)
+        char_limit = self._char_limit(req.target_chars)
         max_tokens = self._compute_generate_max_tokens(req.target_chars)
 
         title = req.next_chapter_hint  # fallback；第一次解析后会覆盖
@@ -195,6 +206,13 @@ class ContinueEngine:
                     LLMMessage("user", cont_user),
                 ]
 
+            if attempt > 0:
+                body_so_far = "\n".join(p for p in body_parts if p).strip()
+                remaining = char_limit - len(body_so_far)
+                if remaining <= 0:
+                    break
+                max_tokens = self._compute_generate_max_tokens(remaining)
+
             resp = self.llm.chat(
                 messages,
                 temperature=0.85,
@@ -220,7 +238,17 @@ class ContinueEngine:
             if merged_finish != "length":
                 break  # 自然结束
 
+            body_so_far = "\n".join(p for p in body_parts if p).strip()
+            if len(body_so_far) >= char_limit:
+                log.info(
+                    "正文已达字数上限 %d（目标 %d），停止自动续写",
+                    char_limit,
+                    req.target_chars,
+                )
+                break
+
         body = "\n".join(p for p in body_parts if p).strip()
+        body = self._truncate_body(body, char_limit)
         # 保留 raw_response 方便 debug
         raw = (title + "\n\n" + body).strip()
         return ContinueResult(
@@ -231,10 +259,31 @@ class ContinueEngine:
             finish_reason=merged_finish,
         )
 
+    @staticmethod
+    def _char_limit(target_chars: int) -> int:
+        """正文允许的最大字数（含标点），PRD F11：目标 ±30%。"""
+        return max(1, int(target_chars * GENERATE_CHAR_FLOAT_RATIO))
+
     def _compute_generate_max_tokens(self, target_chars: int) -> int:
-        """根据目标字数算 max_tokens。中文 1 字 ≈ 1 token；按 ratio 留 buffer。"""
-        est = int(target_chars * self.GENERATE_TOKEN_RATIO) + 500
-        return max(self.GENERATE_MIN_TOKENS, min(self.GENERATE_MAX_TOKENS, est))
+        """根据目标字数算 max_tokens。中文 1 字 ≈ 1 token；按浮动上限 × ratio 留 buffer。"""
+        char_cap = self._char_limit(target_chars)
+        est = int(char_cap * self.GENERATE_TOKEN_RATIO) + self.GENERATE_EXTRA_TOKENS
+        return min(self.GENERATE_MAX_TOKENS, est)
+
+    @staticmethod
+    def _truncate_body(body: str, max_chars: int) -> str:
+        """正文超限时在句/段边界截断（服务端兜底）。"""
+        body = body.strip()
+        if len(body) <= max_chars:
+            return body
+        truncated = body[:max_chars]
+        min_cut = int(max_chars * 0.7)
+        for sep in ("。", "！", "？", "…", "\n\n", "\n", "，"):
+            idx = truncated.rfind(sep)
+            if idx >= min_cut:
+                return truncated[: idx + len(sep)].strip()
+        log.warning("正文超长（%d > %d 字），已在硬截断", len(body), max_chars)
+        return truncated.rstrip()
 
     # ---- AI 重写：给修改意见 + 建议重写版 ----
 
@@ -299,6 +348,7 @@ class ContinueEngine:
         revised_title, revised_body = self._split_title_body(
             revised_text, fallback=current_title or req.next_chapter_hint
         )
+        revised_body = self._truncate_body(revised_body, self._char_limit(req.target_chars))
 
         return CritiqueResult(
             summary=summary,
@@ -313,20 +363,31 @@ class ContinueEngine:
     # ---- prompts ----
 
     def _draft_system(self, req: ContinueRequest) -> str:
-        """plan_draft 用的 system prompt：直接输出完整规划初稿。"""
+        """plan_draft 用的 system prompt：直接输出极简规划初稿。"""
         ctx_text = req.context.render_for_prompt() if req.context else "（暂无上下文）"
         style_text = StyleProfiler._render_profile(req.style) if req.style else ""
         return (
             f"你是资深网文策划编辑，正在为《{req.book_title}》{req.next_chapter_hint}起草规划初稿。\n"
-            f"请直接输出完整规划，覆盖五个维度：剧情走向 / 关键场景 / 爽点 / 节奏 / 坑点。\n\n"
+            f"请直接输出极简规划，覆盖五个维度：剧情走向 / 关键场景 / 爽点 / 节奏 / 坑点。\n\n"
             f"硬性要求：\n"
             f"1. 直接输出规划文本，不要寒暄、不要给选项、不要问作者意见。\n"
-            f"2. 规划长度 500~1500 字（中文），用 Markdown 或清晰的小标题分维度。\n"
-            f"3. 必须承接最近剧情上下文，章末留钩子。\n"
-            f"4. 符合原作风格与节奏。\n\n"
+            f"2. **总长度不超过 {PLAN_DRAFT_MAX_CHARS} 字（含标点）**；五个维度各用 1~2 句短语概括，禁止长篇展开。\n"
+            f"3. 用 Markdown 小标题或「维度：要点」格式，务必极简。\n"
+            f"4. 必须承接最近剧情上下文，章末留钩子。\n"
+            f"5. 符合原作风格与节奏。\n\n"
             f"{ctx_text}\n\n"
             f"{style_text}"
         )
+
+    @staticmethod
+    def _truncate_plan_draft(text: str, max_chars: int = PLAN_DRAFT_MAX_CHARS) -> str:
+        """服务端硬性截断：LLM 超长时兜底，保证初稿不超过字数上限。"""
+        text = text.strip()
+        if len(text) <= max_chars:
+            return text
+        truncated = text[:max_chars].rstrip()
+        log.warning("plan_draft 输出超长（%d 字），已截断至 %d 字", len(text), max_chars)
+        return truncated
 
     def _planning_system(self, req: ContinueRequest) -> str:
         ctx_text = req.context.render_for_prompt() if req.context else "（暂无上下文）"
@@ -382,7 +443,8 @@ class ContinueEngine:
             f"动线指令：{mode_directive}\n"
             f"通用要求：\n"
             f"1. 严格按作者原作风格续写。\n"
-            f"2. 目标字数约 {req.target_chars} 字（不是硬性约束，可上下浮动 30%）。\n"
+            f"2. 正文控制在 {req.target_chars} 字左右，**不得超过 {self._char_limit(req.target_chars)} 字**；"
+            f"宁可略短也不要超字数，在自然断点收笔。\n"
             f"3. 不得与已发生剧情矛盾。\n"
             f"4. 输出格式：第一行是章节标题（与前文风格一致，如『第X章 标题』），从第二行开始是正文。\n"
             f"5. 不要写总结、不要写元评论、不要『全文完』。\n\n"
@@ -418,6 +480,8 @@ class ContinueEngine:
             f"【最近剧情上下文（按远→近顺序）】\n{ctx_text}\n\n"
             f"{history_block}\n\n"
             f"{plan_block}\n\n"
+            f"【字数要求】正文约 {req.target_chars} 字，上限 {self._char_limit(req.target_chars)} 字，"
+            f"不要超过上限。\n\n"
             f"请开始续写。"
         )
 

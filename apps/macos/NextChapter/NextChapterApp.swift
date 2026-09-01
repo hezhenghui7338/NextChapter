@@ -36,10 +36,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // SwiftPM 编译的 app 不会自动加载 Dock 图标，主动设置
         if NSApp.applicationIconImage == nil || NSApp.applicationIconImage?.size == .zero {
-            if let named = NSImage(named: "AppIcon"), named.size != .zero {
-                NSApp.applicationIconImage = named
-            } else if let url = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
-                      let icon = NSImage(contentsOf: url), icon.size != .zero {
+            let bundle = AppResourceBundle.assets
+            if let url = bundle.url(forResource: "AppIcon", withExtension: "icns"),
+               let icon = NSImage(contentsOf: url), icon.size != .zero {
+                NSApp.applicationIconImage = icon
+            } else if let icon = NSImage(named: NSImage.Name("AppIcon")), icon.size != .zero {
                 NSApp.applicationIconImage = icon
             }
         }

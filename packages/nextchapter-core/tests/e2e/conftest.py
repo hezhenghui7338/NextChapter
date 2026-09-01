@@ -26,10 +26,14 @@ def client(mock_llm: MockLLMClient, monkeypatch) -> TestClient:
     from nextchapter_core.style import StyleProfiler
     from nextchapter_core.writing import ContinueEngine
     from nextchapter_core.consistency import ConsistencyChecker
+    from nextchapter_core.jobs import AnalyzeQueue
 
-    monkeypatch.setattr(server_module, "summarizer", Summarizer(mock_llm))
-    monkeypatch.setattr(server_module, "style_profiler", StyleProfiler(mock_llm, server_module.settings.style))
+    summarizer = Summarizer(mock_llm)
+    style_profiler = StyleProfiler(mock_llm, server_module.settings.style)
+    monkeypatch.setattr(server_module, "summarizer", summarizer)
+    monkeypatch.setattr(server_module, "style_profiler", style_profiler)
     monkeypatch.setattr(server_module, "continue_engine", ContinueEngine(mock_llm))
     monkeypatch.setattr(server_module, "checker", ConsistencyChecker(mock_llm))
+    monkeypatch.setattr(server_module, "analyze_queue", AnalyzeQueue(summarizer, style_profiler))
 
     return TestClient(server_module.app)
